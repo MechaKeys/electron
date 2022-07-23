@@ -51,6 +51,7 @@
 #include "shell/browser/ui/views/client_frame_view_linux.h"
 #include "shell/browser/ui/views/frameless_view.h"
 #include "shell/browser/ui/views/native_frame_view.h"
+#include "shell/common/platform_util.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/window/native_frame_view.h"
 
@@ -271,6 +272,8 @@ NativeWindowViews::NativeWindowViews(const gin_helper::Dictionary& options,
   // Set WM_CLASS.
   params.wm_class_name = base::ToLowerASCII(name);
   params.wm_class_class = name;
+  // Set Wayland application ID.
+  params.wayland_app_id = platform_util::GetXdgAppId();
 
   auto* native_widget = new views::DesktopNativeWidgetAura(widget());
   params.native_widget = native_widget;
@@ -494,6 +497,13 @@ void NativeWindowViews::Show() {
 #if defined(USE_OZONE)
   if (global_menu_bar_)
     global_menu_bar_->OnWindowMapped();
+#endif
+
+#if defined(USE_OZONE_PLATFORM_X11)
+  // On X11, setting Z order before showing the window doesn't take effect,
+  // so we have to call it again.
+  if (IsX11())
+    widget()->SetZOrderLevel(widget()->GetZOrderLevel());
 #endif
 }
 
@@ -876,6 +886,11 @@ bool NativeWindowViews::IsMovable() {
 void NativeWindowViews::SetMinimizable(bool minimizable) {
 #if BUILDFLAG(IS_WIN)
   FlipWindowStyle(GetAcceleratedWidget(), minimizable, WS_MINIMIZEBOX);
+  if (IsWindowControlsOverlayEnabled()) {
+    auto* frame_view =
+        static_cast<WinFrameView*>(widget()->non_client_view()->frame_view());
+    frame_view->caption_button_container()->UpdateButtons();
+  }
 #endif
   minimizable_ = minimizable;
 }
@@ -891,6 +906,11 @@ bool NativeWindowViews::IsMinimizable() {
 void NativeWindowViews::SetMaximizable(bool maximizable) {
 #if BUILDFLAG(IS_WIN)
   FlipWindowStyle(GetAcceleratedWidget(), maximizable, WS_MAXIMIZEBOX);
+  if (IsWindowControlsOverlayEnabled()) {
+    auto* frame_view =
+        static_cast<WinFrameView*>(widget()->non_client_view()->frame_view());
+    frame_view->caption_button_container()->UpdateButtons();
+  }
 #endif
   maximizable_ = maximizable;
 }
@@ -925,6 +945,11 @@ void NativeWindowViews::SetClosable(bool closable) {
     EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | MF_ENABLED);
   } else {
     EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
+  }
+  if (IsWindowControlsOverlayEnabled()) {
+    auto* frame_view =
+        static_cast<WinFrameView*>(widget()->non_client_view()->frame_view());
+    frame_view->caption_button_container()->UpdateButtons();
   }
 #endif
 }
@@ -1517,7 +1542,7 @@ void NativeWindowViews::OnWidgetActivationChanged(views::Widget* changed_widget,
     NativeWindow::NotifyWindowBlur();
   }
 
-  // Hide menu bar when window is blured.
+  // Hide menu bar when window is blurred.
   if (!active && IsMenuBarAutoHide() && IsMenuBarVisible())
     SetMenuBarVisibility(false);
 

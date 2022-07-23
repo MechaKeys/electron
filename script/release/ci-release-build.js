@@ -35,19 +35,27 @@ const vstsArmJobs = [
 
 let jobRequestedCount = 0;
 
-async function makeRequest ({ auth, url, headers, body, method }) {
+async function makeRequest ({ auth, username, password, url, headers, body, method }) {
   const clonedHeaders = {
     ...(headers || {})
   };
-  if (auth && auth.bearer) {
+  if (auth?.bearer) {
     clonedHeaders.Authorization = `Bearer ${auth.bearer}`;
   }
-  const response = await got(url, {
+
+  const options = {
     headers: clonedHeaders,
     body,
-    method,
-    auth: auth && (auth.username || auth.password) ? `${auth.username}:${auth.password}` : undefined
-  });
+    method
+  };
+
+  if (username || password) {
+    options.username = username;
+    options.password = password;
+  }
+
+  const response = await got(url, options);
+
   if (response.statusCode < 200 || response.statusCode >= 300) {
     console.error('Error: ', `(status ${response.statusCode})`, response.body);
     throw new Error(`Unexpected status code ${response.statusCode} from ${url}`);
@@ -115,7 +123,7 @@ async function getCircleCIWorkflowId (pipelineId) {
           workflowId = workflows.items.find(item => item.name.includes('publish')).id;
           break;
         }
-        console.log('Unxpected number of workflows, response was:', workflows);
+        console.log('Unexpected number of workflows, response was:', workflows);
         workflowId = -1;
         break;
       }
@@ -139,7 +147,7 @@ async function getCircleCIJobNumber (workflowId) {
       continue;
     }
     if (jobInfo.items.length !== 1) {
-      console.log('Unxpected number of jobs, response was:', jobInfo);
+      console.log('Unexpected number of jobs, response was:', jobInfo);
       jobNumber = -1;
       break;
     }
@@ -170,19 +178,21 @@ async function getCircleCIJobNumber (workflowId) {
 }
 
 async function circleCIRequest (url, method, requestBody) {
-  return makeRequest({
-    auth: {
-      username: process.env.CIRCLE_TOKEN,
-      password: ''
-    },
+  const requestOpts = {
+    username: process.env.CIRCLE_TOKEN,
+    password: '',
     method,
     url,
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json'
-    },
-    body: requestBody ? JSON.stringify(requestBody) : null
-  }, true).catch(err => {
+    }
+  };
+  if (requestBody) {
+    requestOpts.body = JSON.stringify(requestBody);
+  }
+
+  return makeRequest(requestOpts, true).catch(err => {
     console.log('Error calling CircleCI:', err);
   });
 }
@@ -269,10 +279,8 @@ async function buildVSTS (targetBranch, options) {
   }
   const requestOpts = {
     url: `${vstsURL}/definitions?api-version=4.1`,
-    auth: {
-      user: '',
-      password: vstsToken
-    },
+    user: '',
+    password: vstsToken,
     headers: {
       'Content-Type': 'application/json'
     }
@@ -300,10 +308,8 @@ async function callVSTSBuild (build, targetBranch, environmentVariables, vstsURL
   }
   const requestOpts = {
     url: `${vstsURL}/builds?api-version=4.1`,
-    auth: {
-      user: '',
-      password: vstsToken
-    },
+    user: '',
+    password: vstsToken,
     headers: {
       'Content-Type': 'application/json'
     },

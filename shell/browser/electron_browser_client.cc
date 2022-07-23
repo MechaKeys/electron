@@ -30,6 +30,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version.h"
+#include "components/embedder_support/user_agent_utils.h"
 #include "components/net_log/chrome_net_log.h"
 #include "components/network_hints/common/network_hints.mojom.h"
 #include "content/browser/keyboard_lock/keyboard_lock_service_impl.h"  // nogncheck
@@ -451,6 +452,9 @@ void ElectronBrowserClient::RenderProcessWillLaunch(
       new extensions::MessagingAPIMessageFilter(process_id, browser_context));
 #endif
 
+  // Remove in case the host is reused after a crash, otherwise noop.
+  host->RemoveObserver(this);
+
   // ensure the ProcessPreferences is removed later
   host->AddObserver(this);
 }
@@ -492,11 +496,6 @@ void ElectronBrowserClient::OverrideWebkitPrefs(
       native_theme->ShouldUseDarkColors()
           ? blink::mojom::PreferredColorScheme::kDark
           : blink::mojom::PreferredColorScheme::kLight;
-
-  auto preloads =
-      SessionPreferences::GetValidPreloads(web_contents->GetBrowserContext());
-  if (!preloads.empty())
-    prefs->preloads = preloads;
 
   SetFontDefaults(prefs);
 
@@ -1156,6 +1155,10 @@ void ElectronBrowserClient::SetUserAgent(const std::string& user_agent) {
   user_agent_override_ = user_agent;
 }
 
+blink::UserAgentMetadata ElectronBrowserClient::GetUserAgentMetadata() {
+  return embedder_support::GetUserAgentMetadata();
+}
+
 void ElectronBrowserClient::RegisterNonNetworkNavigationURLLoaderFactories(
     int frame_tree_node_id,
     ukm::SourceIdObj ukm_source_id,
@@ -1538,8 +1541,8 @@ bool ElectronBrowserClient::PreSpawnChild(sandbox::TargetPolicy* policy,
                                           ChildSpawnFlags flags) {
   // Allow crashpad to communicate via named pipe.
   sandbox::ResultCode result = policy->AddRule(
-      sandbox::TargetPolicy::SUBSYS_FILES,
-      sandbox::TargetPolicy::FILES_ALLOW_ANY, L"\\??\\pipe\\crashpad_*");
+      sandbox::SubSystem::kFiles, sandbox::Semantics::kFilesAllowAny,
+      L"\\??\\pipe\\crashpad_*");
   if (result != sandbox::SBOX_ALL_OK)
     return false;
   return true;
@@ -1557,7 +1560,7 @@ void ElectronBrowserClient::
   if (contents) {
     auto* prefs = WebContentsPreferences::From(contents);
     if (render_frame_host.GetFrameTreeNodeId() ==
-            contents->GetMainFrame()->GetFrameTreeNodeId() ||
+            contents->GetPrimaryMainFrame()->GetFrameTreeNodeId() ||
         (prefs && prefs->AllowsNodeIntegrationInSubFrames())) {
       associated_registry.AddInterface(base::BindRepeating(
           [](content::RenderFrameHost* render_frame_host,
@@ -1817,6 +1820,7 @@ void BindBadgeServiceForServiceWorker(
 }
 
 void ElectronBrowserClient::RegisterBrowserInterfaceBindersForServiceWorker(
+    content::BrowserContext* browser_context,
     mojo::BinderMapWithContext<const content::ServiceWorkerVersionBaseInfo&>*
         map) {
   map->Add<blink::mojom::BadgeService>(

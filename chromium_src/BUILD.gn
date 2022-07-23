@@ -92,6 +92,7 @@ static_library("chrome") {
       "//chrome/browser/media/webrtc/system_media_capture_permissions_stats_mac.h",
       "//chrome/browser/media/webrtc/system_media_capture_permissions_stats_mac.mm",
       "//chrome/browser/media/webrtc/window_icon_util_mac.mm",
+      "//chrome/browser/platform_util_mac.mm",
       "//chrome/browser/process_singleton_mac.mm",
       "//chrome/browser/ui/views/eye_dropper/eye_dropper_view_mac.h",
       "//chrome/browser/ui/views/eye_dropper/eye_dropper_view_mac.mm",
@@ -216,6 +217,8 @@ static_library("chrome") {
       "//chrome/browser/printing/printer_query.h",
       "//chrome/browser/printing/printing_service.cc",
       "//chrome/browser/printing/printing_service.h",
+      "//components/printing/browser/print_to_pdf/pdf_print_utils.cc",
+      "//components/printing/browser/print_to_pdf/pdf_print_utils.h",
     ]
 
     if (enable_oop_printing) {
@@ -385,13 +388,18 @@ source_set("chrome_spellchecker") {
       "//chrome/browser/spellchecker/spellcheck_factory.h",
       "//chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc",
       "//chrome/browser/spellchecker/spellcheck_hunspell_dictionary.h",
-      "//chrome/browser/spellchecker/spellcheck_language_blocklist_policy_handler.cc",
-      "//chrome/browser/spellchecker/spellcheck_language_blocklist_policy_handler.h",
-      "//chrome/browser/spellchecker/spellcheck_language_policy_handler.cc",
-      "//chrome/browser/spellchecker/spellcheck_language_policy_handler.h",
       "//chrome/browser/spellchecker/spellcheck_service.cc",
       "//chrome/browser/spellchecker/spellcheck_service.h",
     ]
+
+    if (!is_mac) {
+      sources += [
+        "//chrome/browser/spellchecker/spellcheck_language_blocklist_policy_handler.cc",
+        "//chrome/browser/spellchecker/spellcheck_language_blocklist_policy_handler.h",
+        "//chrome/browser/spellchecker/spellcheck_language_policy_handler.cc",
+        "//chrome/browser/spellchecker/spellcheck_language_policy_handler.h",
+      ]
+    }
 
     if (has_spellcheck_panel) {
       sources += [

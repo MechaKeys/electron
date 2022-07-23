@@ -76,9 +76,9 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/gtk/gtk_compat.h"  // nogncheck
 #include "ui/gtk/gtk_util.h"    // nogncheck
+#include "ui/linux/linux_ui.h"
+#include "ui/linux/linux_ui_factory.h"
 #include "ui/ozone/public/ozone_platform.h"
-#include "ui/views/linux_ui/linux_ui.h"
-#include "ui/views/linux_ui/linux_ui_factory.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -217,7 +217,11 @@ int ElectronBrowserMainParts::PreEarlyInitialization() {
   HandleSIGCHLD();
 #endif
 #if BUILDFLAG(IS_LINUX)
+  DetectOzonePlatform();
   ui::OzonePlatform::PreEarlyInitialization();
+#endif
+#if BUILDFLAG(IS_MAC)
+  screen_ = std::make_unique<display::ScopedNativeScreen>();
 #endif
 
   return GetExitCode();
@@ -275,11 +279,9 @@ void ElectronBrowserMainParts::PostEarlyInitialization() {
 
 int ElectronBrowserMainParts::PreCreateThreads() {
 #if defined(USE_AURA)
-  screen_ = views::CreateDesktopScreen();
-  display::Screen::SetScreenInstance(screen_.get());
-#if BUILDFLAG(IS_LINUX)
-  views::LinuxUI::instance()->UpdateDeviceScaleFactor();
-#endif
+  if (!display::Screen::GetScreen()) {
+    screen_ = views::CreateDesktopScreen();
+  }
 #endif
 
   if (!views::LayoutProvider::Get())
@@ -365,7 +367,7 @@ void ElectronBrowserMainParts::PostDestroyThreads() {
 
 void ElectronBrowserMainParts::ToolkitInitialized() {
 #if BUILDFLAG(IS_LINUX)
-  auto linux_ui = CreateLinuxUi();
+  auto linux_ui = ui::CreateLinuxUi();
   DCHECK(ui::LinuxInputMethodContextFactory::instance());
 
   // Try loading gtk symbols used by Electron.
@@ -373,6 +375,10 @@ void ElectronBrowserMainParts::ToolkitInitialized() {
   if (!electron::IsElectron_gtkInitialized()) {
     electron::UninitializeElectron_gtk();
   }
+
+  electron::InitializeElectron_gdk_pixbuf(gtk::GetLibGdkPixbuf());
+  CHECK(electron::IsElectron_gdk_pixbufInitialized())
+      << "Failed to initialize libgdk_pixbuf-2.0.so.0";
 
   // Chromium does not respect GTK dark theme setting, but they may change
   // in future and this code might be no longer needed. Check the Chromium
@@ -383,7 +389,7 @@ void ElectronBrowserMainParts::ToolkitInitialized() {
   // here returns a NativeThemeGtk, which monitors GTK settings.
   dark_theme_observer_ = std::make_unique<DarkThemeObserver>();
   linux_ui->GetNativeTheme(nullptr)->AddObserver(dark_theme_observer_.get());
-  views::LinuxUI::SetInstance(std::move(linux_ui));
+  ui::LinuxUi::SetInstance(std::move(linux_ui));
 
   // Cursor theme changes are tracked by LinuxUI (via a CursorThemeManager
   // implementation). Start observing them once it's initialized.
@@ -452,7 +458,7 @@ int ElectronBrowserMainParts::PreMainMessageLoopRun() {
 #if !BUILDFLAG(IS_MAC)
   // The corresponding call in macOS is in ElectronApplicationDelegate.
   Browser::Get()->WillFinishLaunching();
-  Browser::Get()->DidFinishLaunching(base::DictionaryValue());
+  Browser::Get()->DidFinishLaunching(base::Value::Dict());
 #endif
 
   // Notify observers that main thread message loop was initialized.
