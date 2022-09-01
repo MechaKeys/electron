@@ -175,6 +175,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "printing/backend/win_helper.h"
+#include "shell/browser/native_window_views.h"
 #endif
 #endif
 
@@ -999,12 +1000,8 @@ void WebContents::Destroy() {
     DeleteThisIfAlive();
   } else {
     content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](base::WeakPtr<WebContents> contents) {
-                         if (contents)
-                           contents->DeleteThisIfAlive();
-                       },
-                       GetWeakPtr()));
+        FROM_HERE,
+        base::BindOnce(&WebContents::DeleteThisIfAlive, GetWeakPtr()));
   }
 }
 
@@ -1311,7 +1308,7 @@ void WebContents::EnterFullscreenModeForTab(
   auto callback =
       base::BindRepeating(&WebContents::OnEnterFullscreenModeForTab,
                           base::Unretained(this), requesting_frame, options);
-  permission_helper->RequestFullscreenPermission(callback);
+  permission_helper->RequestFullscreenPermission(requesting_frame, callback);
 }
 
 void WebContents::OnEnterFullscreenModeForTab(
@@ -2419,6 +2416,14 @@ void WebContents::OpenDevTools(gin::Arguments* args) {
     }
   }
 
+#if BUILDFLAG(IS_WIN)
+  auto* win = static_cast<NativeWindowViews*>(owner_window());
+  // Force a detached state when WCO is enabled to match Chrome
+  // behavior and prevent occlusion of DevTools.
+  if (win && win->IsWindowControlsOverlayEnabled())
+    state = "detach";
+#endif
+
   DCHECK(inspectable_web_contents_);
   inspectable_web_contents_->SetDockState(state);
   inspectable_web_contents_->ShowDevTools(activate);
@@ -2859,7 +2864,7 @@ void WebContents::OnPDFCreated(
     gin_helper::Promise<v8::Local<v8::Value>> promise,
     PrintViewManagerElectron::PrintResult print_result,
     scoped_refptr<base::RefCountedMemory> data) {
-  if (print_result != PrintViewManagerElectron::PrintResult::PRINT_SUCCESS) {
+  if (print_result != PrintViewManagerElectron::PrintResult::kPrintSuccess) {
     promise.RejectWithErrorMessage(
         "Failed to generate PDF: " +
         PrintViewManagerElectron::PrintResultToString(print_result));

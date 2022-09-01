@@ -11,8 +11,9 @@
 
 #include "base/logging.h"
 #include "base/no_destructor.h"
-#include "content/browser/renderer_host/frame_tree_node.h"  // nogncheck
+#include "content/browser/renderer_host/render_frame_host_impl.h"  // nogncheck
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "electron/shell/common/api/api.mojom.h"
 #include "gin/object_template_builder.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
@@ -141,17 +142,24 @@ v8::Local<v8::Promise> WebFrameMain::ExecuteJavaScript(
     return handle;
   }
 
-  if (user_gesture) {
-    auto* ftn = content::FrameTreeNode::From(render_frame_);
-    ftn->UpdateUserActivationState(
-        blink::mojom::UserActivationUpdateType::kNotifyActivation,
-        blink::mojom::UserActivationNotificationType::kTest);
-  }
-
-  render_frame_->ExecuteJavaScriptForTests(
-      code, base::BindOnce([](gin_helper::Promise<base::Value> promise,
-                              base::Value value) { promise.Resolve(value); },
-                           std::move(promise)));
+  static_cast<content::RenderFrameHostImpl*>(render_frame_)
+      ->ExecuteJavaScriptForTests(
+          code, user_gesture, true /* resolve_promises */,
+          content::ISOLATED_WORLD_ID_GLOBAL,
+          base::BindOnce(
+              [](gin_helper::Promise<base::Value> promise,
+                 blink::mojom::JavaScriptExecutionResultType type,
+                 base::Value value) {
+                if (type ==
+                    blink::mojom::JavaScriptExecutionResultType::kSuccess) {
+                  promise.Resolve(value);
+                } else {
+                  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+                  v8::HandleScope scope(isolate);
+                  promise.Reject(gin::ConvertToV8(isolate, value));
+                }
+              },
+              std::move(promise)));
 
   return handle;
 }
@@ -288,6 +296,12 @@ GURL WebFrameMain::URL() const {
   return render_frame_->GetLastCommittedURL();
 }
 
+std::string WebFrameMain::Origin() const {
+  if (!CheckRenderFrame())
+    return std::string();
+  return render_frame_->GetLastCommittedOrigin().Serialize();
+}
+
 blink::mojom::PageVisibilityState WebFrameMain::VisibilityState() const {
   if (!CheckRenderFrame())
     return blink::mojom::PageVisibilityState::kHidden;
@@ -389,6 +403,7 @@ v8::Local<v8::ObjectTemplate> WebFrameMain::FillObjectTemplate(
       .SetProperty("processId", &WebFrameMain::ProcessID)
       .SetProperty("routingId", &WebFrameMain::RoutingID)
       .SetProperty("url", &WebFrameMain::URL)
+      .SetProperty("origin", &WebFrameMain::Origin)
       .SetProperty("visibilityState", &WebFrameMain::VisibilityState)
       .SetProperty("top", &WebFrameMain::Top)
       .SetProperty("parent", &WebFrameMain::Parent)

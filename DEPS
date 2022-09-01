@@ -2,9 +2,9 @@ gclient_gn_args_from = 'src'
 
 vars = {
   'chromium_version':
-    '105.0.5187.0',
+    '106.0.5216.0',
   'node_version':
-    'v16.16.0',
+    'v16.17.0',
   'nan_version':
     '16fa32231e2ccd89d2804b3f765319128b20c4ac',
   'squirrel.mac_version':
