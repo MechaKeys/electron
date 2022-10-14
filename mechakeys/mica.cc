@@ -15,6 +15,8 @@ enum DWMWINDOWATTRIBUTE {
 
 enum DWM_BOOL { DWMWCP_FALSE = 0, DWMWCP_TRUE = 1 };
 
+// LRESULT electron browser window ::HandleMessage(UINT uMsg, WPARAM wParam,
+// LPARAM lParam)
 HRESULT TrySetDWMWindowAttribute(HWND hWnd, bool DWMWCP_TRUE) {
   const DWM_BOOL micaPreference = DWMWCP_TRUE;	
   HRESULT result = DwmSetWindowAttribute(hWnd, DWMWA_MICA_EFFECT, &micaPreference, sizeof(micaPreference))
@@ -29,13 +31,14 @@ HRESULT TrySetDWMWindowAttribute(HWND hWnd, bool DWMWCP_TRUE) {
    // MSG msg = {};
    // while (GetMessage(&msg, NULL, 0, 0))
 
+  // DefWindowProc(hWnd, uMsg, wParam, lParam);
    if (version < base::win::Version::WIN11) {
     HWND activeWindow = GetActiveWindow();
     SendMessage(hWnd, WM_NCACTIVATE, hWnd != activeWindow, 0);
     SendMessage(hWnd, WM_NCACTIVATE, hWnd == activeWindow, 0);
   }
 }
-  // LRESULT electron browser window ::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
+
 }   // namespace
 
 namespace electron::win {
