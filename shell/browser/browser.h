@@ -202,10 +202,12 @@ class Browser : public WindowListObserver {
   bool UpdateUserActivityState(const std::string& type,
                                base::Value::Dict user_info);
 
+  void ApplyForcedRTL();
+
   // Bounce the dock icon.
-  enum class BounceType{
-      kCritical = 0,        // NSCriticalRequest
-      kInformational = 10,  // NSInformationalRequest
+  enum class BounceType {
+    kCritical = 0,        // NSCriticalRequest
+    kInformational = 10,  // NSInformationalRequest
   };
   int DockBounce(BounceType type);
   void DockCancelBounce(int request_id);
@@ -276,8 +278,11 @@ class Browser : public WindowListObserver {
   // Tell the application to create a new window for a tab.
   void NewWindowForTab();
 
-  // Tell the application that application did become active
+  // Indicate that the app is now active.
   void DidBecomeActive();
+  // Indicate that the app is no longer active and doesn’t have focus.
+  void DidResignActive();
+
 #endif  // BUILDFLAG(IS_MAC)
 
   // Tell the application that application is activated with visible/invisible
@@ -361,11 +366,7 @@ class Browser : public WindowListObserver {
   base::Time last_dock_show_;
 #endif
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-  base::Value about_panel_options_;
-#elif BUILDFLAG(IS_MAC)
-  base::DictionaryValue about_panel_options_;
-#endif
+  base::Value::Dict about_panel_options_;
 
 #if BUILDFLAG(IS_WIN)
   void UpdateBadgeContents(HWND hwnd,

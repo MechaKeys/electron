@@ -14,7 +14,6 @@
 #include "base/process/process_handle.h"
 #include "base/process/process_metrics_iocounters.h"
 #include "base/system/sys_info.h"
-#include "base/threading/thread_restrictions.h"
 #include "chrome/common/chrome_version.h"
 #include "electron/electron_version.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/global_memory_dump.h"
@@ -23,11 +22,12 @@
 #include "shell/common/application_info.h"
 #include "shell/common/gin_converters/file_path_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/locker.h"
 #include "shell/common/gin_helper/microtasks_scope.h"
 #include "shell/common/gin_helper/promise.h"
 #include "shell/common/heap_snapshot.h"
 #include "shell/common/node_includes.h"
+#include "shell/common/process_util.h"
+#include "shell/common/thread_restrictions.h"
 #include "third_party/blink/renderer/platform/heap/process_heap.h"  // nogncheck
 
 namespace electron {
@@ -50,7 +50,7 @@ void ElectronBindings::BindProcess(v8::Isolate* isolate,
   process->SetMethod("getCreationTime", &GetCreationTime);
   process->SetMethod("getHeapStatistics", &GetHeapStatistics);
   process->SetMethod("getBlinkMemoryInfo", &GetBlinkMemoryInfo);
-  if (gin_helper::Locker::IsBrowserProcess()) {
+  if (electron::IsBrowserProcess()) {
     process->SetMethod("getProcessMemoryInfo", &GetProcessMemoryInfo);
   }
   process->SetMethod("getSystemMemoryInfo", &GetSystemMemoryInfo);
@@ -61,7 +61,7 @@ void ElectronBindings::BindProcess(v8::Isolate* isolate,
                      base::BindRepeating(&ElectronBindings::GetCPUUsage,
                                          base::Unretained(metrics)));
 
-#if defined(MAS_BUILD)
+#if IS_MAS_BUILD()
   process->SetReadOnly("mas", true);
 #endif
 
@@ -209,7 +209,7 @@ v8::Local<v8::Value> ElectronBindings::GetSystemMemoryInfo(
 // static
 v8::Local<v8::Promise> ElectronBindings::GetProcessMemoryInfo(
     v8::Isolate* isolate) {
-  CHECK(gin_helper::Locker::IsBrowserProcess());
+  CHECK(electron::IsBrowserProcess());
   gin_helper::Promise<gin_helper::Dictionary> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
@@ -251,9 +251,11 @@ void ElectronBindings::DidReceiveMemoryDump(
     std::unique_ptr<memory_instrumentation::GlobalMemoryDump> global_dump) {
   v8::Isolate* isolate = promise.isolate();
   v8::HandleScope handle_scope(isolate);
-  gin_helper::MicrotasksScope microtasks_scope(isolate, true);
-  v8::Context::Scope context_scope(
-      v8::Local<v8::Context>::New(isolate, context));
+  v8::Local<v8::Context> local_context =
+      v8::Local<v8::Context>::New(isolate, context);
+  gin_helper::MicrotasksScope microtasks_scope(
+      isolate, local_context->GetMicrotaskQueue(), true);
+  v8::Context::Scope context_scope(local_context);
 
   if (!success) {
     promise.RejectWithErrorMessage("Failed to create memory dump");
@@ -325,7 +327,7 @@ v8::Local<v8::Value> ElectronBindings::GetIOCounters(v8::Isolate* isolate) {
 // static
 bool ElectronBindings::TakeHeapSnapshot(v8::Isolate* isolate,
                                         const base::FilePath& file_path) {
-  base::ThreadRestrictions::ScopedAllowIO allow_io;
+  ScopedAllowBlockingForElectron allow_blocking;
 
   base::File file(file_path,
                   base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);

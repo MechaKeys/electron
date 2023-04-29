@@ -4,13 +4,14 @@ Date: Fri, 26 Aug 2022 00:03:44 +0900
 Subject: v8: [api] Advance API deprecation
 
 Refs https://chromium-review.googlesource.com/c/v8/v8/+/3702449
-Should be upstreamed.
+
+This can be removed when Electron upgrades to Node.js v20.
 
 diff --git a/src/inspector_agent.cc b/src/inspector_agent.cc
-index f708933d8bd6a6dc6741d6af22665b37c56e333a..d029f4e44347bc026d0dff45403227da202020a3 100644
+index e5307b529c88d0e4db7fd7c6bd1b032d219b8c31..f6923be7a9ccdac2396cb625b227094f2686e54b 100644
 --- a/src/inspector_agent.cc
 +++ b/src/inspector_agent.cc
-@@ -217,7 +217,8 @@ class ChannelImpl final : public v8_inspector::V8Inspector::Channel,
+@@ -219,7 +219,8 @@ class ChannelImpl final : public v8_inspector::V8Inspector::Channel,
                         bool prevent_shutdown)
        : delegate_(std::move(delegate)), prevent_shutdown_(prevent_shutdown),
          retaining_context_(false) {

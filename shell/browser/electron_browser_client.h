@@ -22,6 +22,7 @@
 #include "shell/browser/bluetooth/electron_bluetooth_delegate.h"
 #include "shell/browser/hid/electron_hid_delegate.h"
 #include "shell/browser/serial/electron_serial_delegate.h"
+#include "shell/browser/usb/electron_usb_delegate.h"
 #include "third_party/blink/public/mojom/badging/badging.mojom-forward.h"
 
 namespace content {
@@ -70,7 +71,6 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
 
   // content::ContentBrowserClient:
   std::string GetApplicationLocale() override;
-  base::FilePath GetFontLookupTableCacheDir() override;
   bool ShouldEnableStrictSiteIsolation() override;
   void BindHostReceiverForRenderer(
       content::RenderProcessHost* render_process_host,
@@ -103,10 +103,13 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
   content::BluetoothDelegate* GetBluetoothDelegate() override;
 
   content::HidDelegate* GetHidDelegate() override;
+  content::UsbDelegate* GetUsbDelegate() override;
 
   content::WebAuthenticationDelegate* GetWebAuthenticationDelegate() override;
 
+#if BUILDFLAG(IS_MAC)
   device::GeolocationManager* GetGeolocationManager() override;
+#endif
 
   content::PlatformNotificationService* GetPlatformNotificationService();
 
@@ -125,8 +128,6 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
                                       int child_process_id) override;
   void DidCreatePpapiPlugin(content::BrowserPpapiHost* browser_host) override;
   std::string GetGeolocationApiKey() override;
-  scoped_refptr<content::QuotaPermissionContext> CreateQuotaPermissionContext()
-      override;
   content::GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
       content::BrowserContext* context) override;
   void AllowCertificateError(
@@ -162,9 +163,6 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
   std::unique_ptr<content::VideoOverlayWindow>
   CreateWindowForVideoPictureInPicture(
       content::VideoPictureInPictureWindowController* controller) override;
-  std::unique_ptr<content::DocumentOverlayWindow>
-  CreateWindowForDocumentPictureInPicture(
-      content::DocumentPictureInPictureWindowController* controller) override;
 #endif
   void GetAdditionalAllowedSchemesForFileSystem(
       std::vector<std::string>* additional_schemes) override;
@@ -236,9 +234,7 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
   std::vector<std::unique_ptr<content::URLLoaderRequestInterceptor>>
   WillCreateURLLoaderRequestInterceptors(
       content::NavigationUIData* navigation_ui_data,
-      int frame_tree_node_id,
-      const scoped_refptr<network::SharedURLLoaderFactory>&
-          network_loader_factory) override;
+      int frame_tree_node_id) override;
   bool ShouldTreatURLSchemeAsFirstPartyWhenTopLevel(
       base::StringPiece scheme,
       bool is_embedded_origin_secure) override;
@@ -247,11 +243,6 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
       const url::Origin& origin,
       bool is_for_isolated_world,
       network::mojom::URLLoaderFactoryParams* factory_params) override;
-#if BUILDFLAG(IS_WIN)
-  bool PreSpawnChild(sandbox::TargetPolicy* policy,
-                     sandbox::mojom::Sandbox sandbox_type,
-                     ChildSpawnFlags flags) override;
-#endif
   void RegisterAssociatedInterfaceBindersForRenderFrameHost(
       content::RenderFrameHost& render_frame_host,
       blink::AssociatedInterfaceRegistry& associated_registry) override;
@@ -333,6 +324,7 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
 
   std::unique_ptr<ElectronSerialDelegate> serial_delegate_;
   std::unique_ptr<ElectronBluetoothDelegate> bluetooth_delegate_;
+  std::unique_ptr<ElectronUsbDelegate> usb_delegate_;
   std::unique_ptr<ElectronHidDelegate> hid_delegate_;
   std::unique_ptr<ElectronWebAuthenticationDelegate>
       web_authentication_delegate_;

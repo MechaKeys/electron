@@ -12,10 +12,6 @@
 #include "build/build_config.h"
 #include "shell/browser/login_handler.h"
 
-namespace base {
-class DictionaryValue;
-}
-
 namespace electron {
 
 class BrowserObserver : public base::CheckedObserver {
@@ -82,8 +78,10 @@ class BrowserObserver : public base::CheckedObserver {
   // User clicked the native macOS new tab button. (macOS only)
   virtual void OnNewWindowForTab() {}
 
-  // Browser did become active.
+  // Browser became active.
   virtual void OnDidBecomeActive() {}
+  // Browser lost active status.
+  virtual void OnDidResignActive() {}
 #endif
 
  protected:

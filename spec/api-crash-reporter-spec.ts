@@ -3,13 +3,13 @@ import * as childProcess from 'child_process';
 import * as http from 'http';
 import * as Busboy from 'busboy';
 import * as path from 'path';
-import { ifdescribe, ifit, defer, startRemoteControlApp, delay, repeatedly } from './spec-helpers';
+import { ifdescribe, ifit, defer, startRemoteControlApp, repeatedly, listen } from './lib/spec-helpers';
 import { app } from 'electron/main';
 import { crashReporter } from 'electron/common';
-import { AddressInfo } from 'net';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as uuid from 'uuid';
+import { setTimeout } from 'timers/promises';
 
 const isWindowsOnArm = process.platform === 'win32' && process.arch === 'arm64';
 const isLinuxOnArm = process.platform === 'linux' && process.arch.includes('arm');
@@ -63,7 +63,7 @@ const startServer = async () => {
   }
 
   const server = http.createServer((req, res) => {
-    const busboy = new Busboy({ headers: req.headers });
+    const busboy = Busboy({ headers: req.headers });
     const fields = {} as Record<string, any>;
     const files = {} as Record<string, Buffer>;
     busboy.on('file', (fieldname, file) => {
@@ -89,11 +89,7 @@ const startServer = async () => {
     req.pipe(busboy);
   });
 
-  await new Promise<void>(resolve => {
-    server.listen(0, '127.0.0.1', () => { resolve(); });
-  });
-
-  const port = (server.address() as AddressInfo).port;
+  const { port } = await listen(server);
 
   defer(() => { server.close(); });
 
@@ -173,6 +169,33 @@ ifdescribe(!isLinuxOnArm && !process.mas && !process.env.DISABLE_CRASH_REPORTER_
       checkCrash('node', crash);
       expect(crash.mainProcessSpecific).to.be.undefined();
       expect(crash.rendererSpecific).to.be.undefined();
+    });
+
+    ifit(!isLinuxOnArm)('when a node process inside a node process crashes', async () => {
+      const { port, waitForCrash } = await startServer();
+      runCrashApp('node-fork', port);
+      const crash = await waitForCrash();
+      checkCrash('node', crash);
+      expect(crash.mainProcessSpecific).to.be.undefined();
+      expect(crash.rendererSpecific).to.be.undefined();
+    });
+
+    // Ensures that passing in crashpadHandlerPID flag for Linx child processes
+    // does not affect child proocess args.
+    ifit(process.platform === 'linux')('ensure linux child process args are not modified', async () => {
+      const { port, waitForCrash } = await startServer();
+      let exitCode: number | null = null;
+      const appPath = path.join(__dirname, 'fixtures', 'apps', 'crash');
+      const crashType = 'node-extra-args';
+      const crashProcess = childProcess.spawn(process.execPath, [appPath,
+        `--crash-type=${crashType}`,
+        `--crash-reporter-url=http://127.0.0.1:${port}`
+      ], { stdio: 'inherit' });
+      crashProcess.once('close', (code) => {
+        exitCode = code;
+      });
+      await waitForCrash();
+      expect(exitCode).to.equal(0);
     });
 
     describe('with guid', () => {
@@ -276,10 +299,10 @@ ifdescribe(!isLinuxOnArm && !process.mas && !process.env.DISABLE_CRASH_REPORTER_
           ignoreSystemCrashHandler: true,
           extra: { longParam: 'a'.repeat(100000) }
         });
-        setTimeout(() => process.crash());
+        setTimeout().then(() => process.crash());
       }, port);
       const crash = await waitForCrash();
-      expect(stitchLongCrashParam(crash, 'longParam')).to.have.lengthOf(160 * 127 + (process.platform === 'linux' ? 159 : 0), 'crash should have truncated longParam');
+      expect(stitchLongCrashParam(crash, 'longParam')).to.have.lengthOf(160 * 127, 'crash should have truncated longParam');
     });
 
     it('should omit extra keys with names longer than the maximum', async () => {
@@ -298,7 +321,7 @@ ifdescribe(!isLinuxOnArm && !process.mas && !process.env.DISABLE_CRASH_REPORTER_
           }
         });
         require('electron').crashReporter.addExtraParameter('c'.repeat(kKeyLengthMax + 10), 'value');
-        setTimeout(() => process.crash());
+        setTimeout().then(() => process.crash());
       }, port, kKeyLengthMax);
       const crash = await waitForCrash();
       expect(crash).not.to.have.property('a'.repeat(kKeyLengthMax + 10));
@@ -353,7 +376,7 @@ ifdescribe(!isLinuxOnArm && !process.mas && !process.env.DISABLE_CRASH_REPORTER_
     waitForCrash().then(() => expect.fail('expected not to receive a dump'));
     await runCrashApp('renderer', port, ['--no-upload']);
     // wait a sec in case the crash reporter is about to upload a crash
-    await delay(1000);
+    await setTimeout(1000);
     expect(getCrashes()).to.have.length(0);
   });
 
@@ -480,7 +503,7 @@ ifdescribe(!isLinuxOnArm && !process.mas && !process.env.DISABLE_CRASH_REPORTER_
     function crash (processType: string, remotely: Function) {
       if (processType === 'main') {
         return remotely(() => {
-          setTimeout(() => { process.crash(); });
+          setTimeout().then(() => { process.crash(); });
         });
       } else if (processType === 'renderer') {
         return remotely(() => {

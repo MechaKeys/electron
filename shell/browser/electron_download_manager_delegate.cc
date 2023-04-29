@@ -8,8 +8,8 @@
 #include <tuple>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/common/pref_names.h"
@@ -29,6 +29,7 @@
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/file_path_converter.h"
 #include "shell/common/options_switches.h"
+#include "shell/common/thread_restrictions.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <vector>
@@ -218,7 +219,7 @@ void ElectronDownloadManagerDelegate::OnDownloadPathGenerated(
     content::DownloadTargetCallback callback,
     const base::FilePath& default_path) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  base::ThreadRestrictions::ScopedAllowIO allow_io;
+  ScopedAllowBlockingForElectron allow_blocking;
 
   auto* item = download_manager_->GetDownload(download_id);
   if (!item)
@@ -273,7 +274,7 @@ void ElectronDownloadManagerDelegate::OnDownloadPathGenerated(
     std::move(callback).Run(
         path, download::DownloadItem::TARGET_DISPOSITION_PROMPT,
         download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-        item->GetMixedContentStatus(), path, base::FilePath(),
+        item->GetInsecureDownloadStatus(), path, base::FilePath(),
         std::string() /*mime_type*/, download::DOWNLOAD_INTERRUPT_REASON_NONE);
   }
 }
@@ -313,7 +314,7 @@ void ElectronDownloadManagerDelegate::OnDownloadSaveDialogDone(
   std::move(download_callback)
       .Run(path, download::DownloadItem::TARGET_DISPOSITION_PROMPT,
            download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-           item->GetMixedContentStatus(), path, base::FilePath(),
+           item->GetInsecureDownloadStatus(), path, base::FilePath(),
            std::string() /*mime_type*/, interrupt_reason);
 }
 
@@ -332,7 +333,7 @@ bool ElectronDownloadManagerDelegate::DetermineDownloadTarget(
         download->GetForcedFilePath(),
         download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
         download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-        download::DownloadItem::MixedContentStatus::UNKNOWN,
+        download::DownloadItem::InsecureDownloadStatus::UNKNOWN,
         download->GetForcedFilePath(), base::FilePath(),
         std::string() /*mime_type*/, download::DOWNLOAD_INTERRUPT_REASON_NONE);
     return true;
@@ -345,7 +346,7 @@ bool ElectronDownloadManagerDelegate::DetermineDownloadTarget(
     std::move(*callback).Run(
         save_path, download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
         download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-        download::DownloadItem::MixedContentStatus::UNKNOWN, save_path,
+        download::DownloadItem::InsecureDownloadStatus::UNKNOWN, save_path,
         base::FilePath(), std::string() /*mime_type*/,
         download::DOWNLOAD_INTERRUPT_REASON_NONE);
     return true;

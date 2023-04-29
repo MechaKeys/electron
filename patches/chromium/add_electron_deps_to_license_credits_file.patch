@@ -6,15 +6,14 @@ Subject: add electron deps to license credits file
 Ensure that licenses for the dependencies introduced by Electron
 are included in `LICENSES.chromium.html`
 
-diff --git a/tools/licenses.py b/tools/licenses.py
-index c4ffc17fb5b372d56f68bc69e9d4fc93ae40d45f..253618104ea7bb4c97085da9df1496efaee32a46 100755
---- a/tools/licenses.py
-+++ b/tools/licenses.py
-@@ -347,6 +347,32 @@ SPECIAL_CASES = {
-         "License File":
-         "/third_party/swiftshader/third_party/SPIRV-Headers/LICENSE",
+diff --git a/tools/licenses/licenses.py b/tools/licenses/licenses.py
+index d775931a09f38db3eb472d095d461b50c5ef76f0..9d844edc8f7c2f526fa99804e8a072da1f47c656 100755
+--- a/tools/licenses/licenses.py
++++ b/tools/licenses/licenses.py
+@@ -383,6 +383,31 @@ SPECIAL_CASES = {
+         "License": "Apache 2.0",
+         "License File": "/third_party/selenium-atoms/LICENSE.closure",
      },
-+
 +    os.path.join('third_party', 'electron_node'): {
 +        "Name": "Node.js",
 +        "URL": "https://github.com/nodejs/node",

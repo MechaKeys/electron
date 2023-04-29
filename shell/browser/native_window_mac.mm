@@ -23,6 +23,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/desktop_media_id.h"
+#include "shell/browser/browser.h"
 #include "shell/browser/javascript_environment.h"
 #include "shell/browser/native_browser_view_mac.h"
 #include "shell/browser/ui/cocoa/electron_native_widget_mac.h"
@@ -34,7 +35,6 @@
 #include "shell/browser/ui/cocoa/window_buttons_proxy.h"
 #include "shell/browser/ui/drag_util.h"
 #include "shell/browser/ui/inspectable_web_contents.h"
-#include "shell/browser/ui/inspectable_web_contents_view.h"
 #include "shell/browser/window_list.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
@@ -210,6 +210,9 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   std::string windowType;
   options.Get(options::kType, &windowType);
 
+  bool hiddenInMissionControl = false;
+  options.Get(options::kHiddenInMissionControl, &hiddenInMissionControl);
+
   bool useStandardWindow = true;
   // eventually deprecate separate "standardWindow" option in favor of
   // standard / textured window types
@@ -224,8 +227,8 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
 
   NSUInteger styleMask = NSWindowStyleMaskTitled;
 
-  // Removing NSWindowStyleMaskTitled removes window title, which removes
-  // rounded corners of window.
+  // The NSWindowStyleMaskFullSizeContentView style removes rounded corners
+  // for frameless window.
   bool rounded_corner = true;
   options.Get(options::kRoundedCorners, &rounded_corner);
   if (!rounded_corner && !has_frame())
@@ -347,6 +350,8 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   bool disableAutoHideCursor = false;
   options.Get(options::kDisableAutoHideCursor, &disableAutoHideCursor);
   [window_ setDisableAutoHideCursor:disableAutoHideCursor];
+
+  SetHiddenInMissionControl(hiddenInMissionControl);
 
   // Set maximizable state last to ensure zoom button does not get reset
   // by calls to other APIs.
@@ -615,7 +620,7 @@ void NativeWindowMac::SetFullScreen(bool fullscreen) {
     return;
   }
 
-  if (fullscreen == IsFullscreen())
+  if (fullscreen == IsFullscreen() || !IsFullScreenable())
     return;
 
   // Take note of the current window size
@@ -1026,9 +1031,12 @@ void NativeWindowMac::SetKiosk(bool kiosk) {
     is_kiosk_ = true;
     SetFullScreen(true);
   } else if (!kiosk && is_kiosk_) {
-    [NSApp setPresentationOptions:kiosk_options_];
     is_kiosk_ = false;
     SetFullScreen(false);
+
+    // Set presentation options *after* asynchronously exiting
+    // fullscreen to ensure they take effect.
+    [NSApp setPresentationOptions:kiosk_options_];
   }
 }
 
@@ -1055,6 +1063,10 @@ void NativeWindowMac::SetHasShadow(bool has_shadow) {
 
 bool NativeWindowMac::HasShadow() {
   return [window_ hasShadow];
+}
+
+void NativeWindowMac::InvalidateShadow() {
+  [window_ invalidateShadow];
 }
 
 void NativeWindowMac::SetOpacity(const double opacity) {
@@ -1086,9 +1098,17 @@ bool NativeWindowMac::IsDocumentEdited() {
   return [window_ isDocumentEdited];
 }
 
+bool NativeWindowMac::IsHiddenInMissionControl() {
+  NSUInteger collectionBehavior = [window_ collectionBehavior];
+  return collectionBehavior & NSWindowCollectionBehaviorTransient;
+}
+
+void NativeWindowMac::SetHiddenInMissionControl(bool hidden) {
+  SetCollectionBehavior(hidden, NSWindowCollectionBehaviorTransient);
+}
+
 void NativeWindowMac::SetIgnoreMouseEvents(bool ignore, bool forward) {
   [window_ setIgnoresMouseEvents:ignore];
-
   if (!ignore) {
     SetForwardMouseMessages(NO);
   } else {
@@ -1196,7 +1216,7 @@ content::DesktopMediaID NativeWindowMac::GetDesktopMediaID() const {
   auto desktop_media_id = content::DesktopMediaID(
       content::DesktopMediaID::TYPE_WINDOW, GetAcceleratedWidget());
   // c.f.
-  // https://source.chromium.org/chromium/chromium/src/+/master:chrome/browser/media/webrtc/native_desktop_media_list.cc;l=372?q=kWindowCaptureMacV2&ss=chromium
+  // https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/media/webrtc/native_desktop_media_list.cc;l=775-780;drc=79502ab47f61bff351426f57f576daef02b1a8dc
   // Refs https://github.com/electron/electron/pull/30507
   // TODO(deepak1556): Match upstream for `kWindowCaptureMacV2`
 #if 0
@@ -1262,18 +1282,15 @@ void NativeWindowMac::SetOverlayIcon(const gfx::Image& overlay,
 void NativeWindowMac::SetVisibleOnAllWorkspaces(bool visible,
                                                 bool visibleOnFullScreen,
                                                 bool skipTransformProcessType) {
-  // In order for NSWindows to be visible on fullscreen we need to functionally
-  // mimic app.dock.hide() since Apple changed the underlying functionality of
+  // In order for NSWindows to be visible on fullscreen we need to invoke
+  // app.dock.hide() since Apple changed the underlying functionality of
   // NSWindows starting with 10.14 to disallow NSWindows from floating on top of
   // fullscreen apps.
   if (!skipTransformProcessType) {
-    ProcessSerialNumber psn = {0, kCurrentProcess};
     if (visibleOnFullScreen) {
-      [window_ setCanHide:NO];
-      TransformProcessType(&psn, kProcessTransformToUIElementApplication);
+      Browser::Get()->DockHide();
     } else {
-      [window_ setCanHide:YES];
-      TransformProcessType(&psn, kProcessTransformToForegroundApplication);
+      Browser::Get()->DockShow(JavascriptEnvironment::GetIsolate());
     }
   }
 
@@ -1455,7 +1472,7 @@ bool NativeWindowMac::GetWindowButtonVisibility() const {
          ![window_ standardWindowButton:NSWindowCloseButton].hidden;
 }
 
-void NativeWindowMac::SetTrafficLightPosition(
+void NativeWindowMac::SetWindowButtonPosition(
     absl::optional<gfx::Point> position) {
   traffic_light_position_ = std::move(position);
   if (buttons_proxy_) {
@@ -1464,7 +1481,7 @@ void NativeWindowMac::SetTrafficLightPosition(
   }
 }
 
-absl::optional<gfx::Point> NativeWindowMac::GetTrafficLightPosition() const {
+absl::optional<gfx::Point> NativeWindowMac::GetWindowButtonPosition() const {
   return traffic_light_position_;
 }
 
@@ -1652,9 +1669,9 @@ class NativeAppWindowFrameViewMac : public views::NativeFrameViewMac {
 
     // Check for possible draggable region in the client area for the frameless
     // window.
-    SkRegion const* draggable_region = native_window_->draggable_region();
-    if (draggable_region && draggable_region->contains(point.x(), point.y()))
-      return HTCAPTION;
+    int contents_hit_test = native_window_->NonClientHitTest(point);
+    if (contents_hit_test != HTNOWHERE)
+      return contents_hit_test;
 
     return HTCLIENT;
   }

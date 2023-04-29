@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/task/single_thread_task_runner.h"
 #include "electron/buildflags/buildflags.h"
 #include "gin/dictionary.h"
 #include "shell/browser/api/electron_api_browser_view.h"
@@ -21,6 +22,7 @@
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_converters/image_converter.h"
 #include "shell/common/gin_converters/native_window_converter.h"
+#include "shell/common/gin_converters/optional_converter.h"
 #include "shell/common/gin_converters/value_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
@@ -116,7 +118,8 @@ BaseWindow::~BaseWindow() {
 
   // Destroy the native window in next tick because the native code might be
   // iterating all windows.
-  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, window_.release());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+      FROM_HERE, window_.release());
 
   // Remove global reference so the JS object can be garbage collected.
   self_ref_.Reset();
@@ -164,7 +167,8 @@ void BaseWindow::OnWindowClosed() {
   BaseWindow::ResetBrowserViews();
 
   // Destroy the native class when window is closed.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, GetDestroyClosure());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, GetDestroyClosure());
 }
 
 void BaseWindow::OnWindowEndSession() {
@@ -639,6 +643,10 @@ std::string BaseWindow::GetBackgroundColor(gin_helper::Arguments* args) {
   return ToRGBHex(window_->GetBackgroundColor());
 }
 
+void BaseWindow::InvalidateShadow() {
+  window_->InvalidateShadow();
+}
+
 void BaseWindow::SetHasShadow(bool has_shadow) {
   window_->SetHasShadow(has_shadow);
 }
@@ -766,6 +774,7 @@ void BaseWindow::AddBrowserView(gin::Handle<BrowserView> browser_view) {
     }
 
     window_->AddBrowserView(browser_view->view());
+    window_->AddDraggableRegionProvider(browser_view.get());
     browser_view->SetOwnerWindow(this);
     browser_views_[browser_view->ID()].Reset(isolate(), browser_view.ToV8());
   }
@@ -775,6 +784,7 @@ void BaseWindow::RemoveBrowserView(gin::Handle<BrowserView> browser_view) {
   auto iter = browser_views_.find(browser_view->ID());
   if (iter != browser_views_.end()) {
     window_->RemoveBrowserView(browser_view->view());
+    window_->RemoveDraggableRegionProvider(browser_view.get());
     browser_view->SetOwnerWindow(nullptr);
     iter->second.Reset();
     browser_views_.erase(iter);
@@ -867,17 +877,22 @@ bool BaseWindow::GetWindowButtonVisibility() const {
   return window_->GetWindowButtonVisibility();
 }
 
-void BaseWindow::SetTrafficLightPosition(const gfx::Point& position) {
-  // For backward compatibility we treat (0, 0) as resetting to default.
-  if (position.IsOrigin())
-    window_->SetTrafficLightPosition(absl::nullopt);
-  else
-    window_->SetTrafficLightPosition(position);
+void BaseWindow::SetWindowButtonPosition(absl::optional<gfx::Point> position) {
+  window_->SetWindowButtonPosition(std::move(position));
 }
 
-gfx::Point BaseWindow::GetTrafficLightPosition() const {
-  // For backward compatibility we treat default value as (0, 0).
-  return window_->GetTrafficLightPosition().value_or(gfx::Point());
+absl::optional<gfx::Point> BaseWindow::GetWindowButtonPosition() const {
+  return window_->GetWindowButtonPosition();
+}
+#endif
+
+#if BUILDFLAG(IS_MAC)
+bool BaseWindow::IsHiddenInMissionControl() {
+  return window_->IsHiddenInMissionControl();
+}
+
+void BaseWindow::SetHiddenInMissionControl(bool hidden) {
+  window_->SetHiddenInMissionControl(hidden);
 }
 #endif
 
@@ -1114,6 +1129,7 @@ void BaseWindow::ResetBrowserViews() {
       DCHECK_EQ(owner_window, this);
       browser_view->SetOwnerWindow(nullptr);
       window_->RemoveBrowserView(browser_view->view());
+      window_->RemoveDraggableRegionProvider(browser_view.get());
       browser_view->SetOwnerWindow(nullptr);
     }
 
@@ -1246,16 +1262,19 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("isVisibleOnAllWorkspaces",
                  &BaseWindow::IsVisibleOnAllWorkspaces)
 #if BUILDFLAG(IS_MAC)
+      .SetMethod("invalidateShadow", &BaseWindow::InvalidateShadow)
       .SetMethod("_getAlwaysOnTopLevel", &BaseWindow::GetAlwaysOnTopLevel)
       .SetMethod("setAutoHideCursor", &BaseWindow::SetAutoHideCursor)
 #endif
       .SetMethod("setVibrancy", &BaseWindow::SetVibrancy)
+
 #if BUILDFLAG(IS_MAC)
-      .SetMethod("setTrafficLightPosition",
-                 &BaseWindow::SetTrafficLightPosition)
-      .SetMethod("getTrafficLightPosition",
-                 &BaseWindow::GetTrafficLightPosition)
+      .SetMethod("isHiddenInMissionControl",
+                 &BaseWindow::IsHiddenInMissionControl)
+      .SetMethod("setHiddenInMissionControl",
+                 &BaseWindow::SetHiddenInMissionControl)
 #endif
+
       .SetMethod("_setTouchBarItems", &BaseWindow::SetTouchBar)
       .SetMethod("_refreshTouchBarItem", &BaseWindow::RefreshTouchBarItem)
       .SetMethod("_setEscapeTouchBarItem", &BaseWindow::SetEscapeTouchBarItem)
@@ -1270,6 +1289,10 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
                  &BaseWindow::SetWindowButtonVisibility)
       .SetMethod("_getWindowButtonVisibility",
                  &BaseWindow::GetWindowButtonVisibility)
+      .SetMethod("setWindowButtonPosition",
+                 &BaseWindow::SetWindowButtonPosition)
+      .SetMethod("getWindowButtonPosition",
+                 &BaseWindow::GetWindowButtonPosition)
       .SetProperty("excludedFromShownWindowsMenu",
                    &BaseWindow::IsExcludedFromShownWindowsMenu,
                    &BaseWindow::SetExcludedFromShownWindowsMenu)
@@ -1330,4 +1353,4 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_base_window, Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_base_window, Initialize)

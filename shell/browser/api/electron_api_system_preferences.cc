@@ -17,17 +17,21 @@ namespace electron::api {
 
 gin::WrapperInfo SystemPreferences::kWrapperInfo = {gin::kEmbedderNativeGin};
 
+#if BUILDFLAG(IS_WIN)
 SystemPreferences::SystemPreferences() {
-#if BUILDFLAG(IS_WIN)
   InitializeWindow();
-#endif
 }
+#else
+SystemPreferences::SystemPreferences() = default;
+#endif
 
-SystemPreferences::~SystemPreferences() {
 #if BUILDFLAG(IS_WIN)
+SystemPreferences::~SystemPreferences() {
   Browser::Get()->RemoveObserver(this);
-#endif
 }
+#else
+SystemPreferences::~SystemPreferences() = default;
+#endif
 
 bool SystemPreferences::IsInvertedColorScheme() {
   return ui::NativeTheme::GetInstanceForNativeUi()
@@ -132,5 +136,5 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_system_preferences,
-                                 Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_system_preferences,
+                                  Initialize)

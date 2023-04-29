@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
@@ -17,20 +18,25 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/ui/color/chrome_color_mixers.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "components/os_crypt/key_storage_config_linux.h"
-#include "components/os_crypt/os_crypt.h"
+#include "components/os_crypt/sync/key_storage_config_linux.h"
+#include "components/os_crypt/sync/os_crypt.h"
 #include "content/browser/browser_main_loop.h"  // nogncheck
+#include "content/public/browser/browser_child_process_host_delegate.h"
+#include "content/public/browser/browser_child_process_host_iterator.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_data.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/device_service.h"
 #include "content/public/browser/first_party_sets_handler.h"
 #include "content/public/browser/web_ui_controller_factory.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/process_type.h"
 #include "content/public/common/result_codes.h"
 #include "electron/buildflags/buildflags.h"
 #include "electron/fuses.h"
@@ -39,6 +45,7 @@
 #include "services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.h"
 #include "shell/app/electron_main_delegate.h"
 #include "shell/browser/api/electron_api_app.h"
+#include "shell/browser/api/electron_api_utility_process.h"
 #include "shell/browser/browser.h"
 #include "shell/browser/browser_process_impl.h"
 #include "shell/browser/electron_browser_client.h"
@@ -69,7 +76,6 @@
 
 #if BUILDFLAG(IS_LINUX)
 #include "base/environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/dbus/dbus_bluez_manager_wrapper_linux.h"
 #include "electron/electron_gtk_stubs.h"
@@ -92,8 +98,7 @@
 #endif
 
 #if BUILDFLAG(IS_MAC)
-#include "components/os_crypt/keychain_password_mac.h"
-#include "services/device/public/cpp/geolocation/geolocation_manager.h"
+#include "components/os_crypt/sync/keychain_password_mac.h"
 #include "shell/browser/ui/cocoa/views_delegate_mac.h"
 #else
 #include "shell/browser/ui/views/electron_views_delegate.h"
@@ -111,6 +116,11 @@
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
 #include "chrome/browser/spellchecker/spellcheck_factory.h"  // nogncheck
 #endif
+
+#if BUILDFLAG(ENABLE_PLUGINS)
+#include "content/public/browser/plugin_service.h"
+#include "shell/common/plugin_info.h"
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 namespace electron {
 
@@ -230,7 +240,7 @@ int ElectronBrowserMainParts::GetExitCode() const {
 }
 
 int ElectronBrowserMainParts::PreEarlyInitialization() {
-  field_trial_list_ = std::make_unique<base::FieldTrialList>(nullptr);
+  field_trial_list_ = std::make_unique<base::FieldTrialList>();
 #if BUILDFLAG(IS_POSIX)
   HandleSIGCHLD();
 #endif
@@ -251,7 +261,7 @@ int ElectronBrowserMainParts::PreEarlyInitialization() {
 void ElectronBrowserMainParts::PostEarlyInitialization() {
   // A workaround was previously needed because there was no ThreadTaskRunner
   // set.  If this check is failing we may need to re-add that workaround
-  DCHECK(base::ThreadTaskRunnerHandle::IsSet());
+  DCHECK(base::SingleThreadTaskRunner::HasCurrentDefault());
 
   // The ProxyResolverV8 has setup a complete V8 environment, in order to
   // avoid conflicts we only initialize our V8 environment after that.
@@ -259,25 +269,28 @@ void ElectronBrowserMainParts::PostEarlyInitialization() {
 
   v8::HandleScope scope(js_env_->isolate());
 
-  node_bindings_->Initialize();
+  node_bindings_->Initialize(js_env_->isolate()->GetCurrentContext());
   // Create the global environment.
   node::Environment* env = node_bindings_->CreateEnvironment(
-      js_env_->context(), js_env_->platform());
+      js_env_->isolate()->GetCurrentContext(), js_env_->platform());
   node_env_ = std::make_unique<NodeEnvironment>(env);
 
   env->set_trace_sync_io(env->options()->trace_sync_io);
 
   // We do not want to crash the main process on unhandled rejections.
-  env->options()->unhandled_rejections = "warn";
+  env->options()->unhandled_rejections = "warn-with-error-code";
 
   // Add Electron extended APIs.
   electron_bindings_->BindTo(js_env_->isolate(), env->process_object());
 
-  // Load everything.
-  node_bindings_->LoadEnvironment(env);
+  // Create explicit microtasks runner.
+  js_env_->CreateMicrotasksRunner();
 
   // Wrap the uv loop with global env.
   node_bindings_->set_uv_env(env);
+
+  // Load everything.
+  node_bindings_->LoadEnvironment(env);
 
   // We already initialized the feature list in PreEarlyInitialization(), but
   // the user JS script would not have had a chance to alter the command-line
@@ -368,6 +381,7 @@ int ElectronBrowserMainParts::PreCreateThreads() {
 
 #if BUILDFLAG(IS_MAC)
   ui::InitIdleMonitor();
+  Browser::Get()->ApplyForcedRTL();
 #endif
 
   fake_browser_process_->PreCreateThreads();
@@ -382,6 +396,18 @@ void ElectronBrowserMainParts::PostCreateThreads() {
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&tracing::TracingSamplerProfiler::CreateOnChildThread));
+#if BUILDFLAG(ENABLE_PLUGINS)
+  // PluginService can only be used on the UI thread
+  // and ContentClient::AddPlugins gets called for both browser and render
+  // process where the latter will not have UI thread which leads to DCHECK.
+  // Separate the WebPluginInfo registration for these processes.
+  std::vector<content::WebPluginInfo> plugins;
+  auto* plugin_service = content::PluginService::GetInstance();
+  plugin_service->RefreshPlugins();
+  GetInternalPlugins(&plugins);
+  for (const auto& plugin : plugins)
+    plugin_service->RegisterInternalPlugin(plugin, true);
+#endif
 }
 
 void ElectronBrowserMainParts::PostDestroyThreads() {
@@ -503,7 +529,6 @@ int ElectronBrowserMainParts::PreMainMessageLoopRun() {
 
 void ElectronBrowserMainParts::WillRunMainMessageLoop(
     std::unique_ptr<base::RunLoop>& run_loop) {
-  js_env_->OnMessageLoopCreated();
   exit_code_ = content::RESULT_CODE_NORMAL_EXIT;
   Browser::Get()->SetMainMessageLoopQuitClosure(
       run_loop->QuitWhenIdleClosure());
@@ -517,7 +542,8 @@ void ElectronBrowserMainParts::PostCreateMainMessageLoop() {
   auto shutdown_cb =
       base::BindOnce(base::RunLoop::QuitCurrentWhenIdleClosureDeprecated());
   ui::OzonePlatform::GetInstance()->PostCreateMainMessageLoop(
-      std::move(shutdown_cb));
+      std::move(shutdown_cb),
+      content::GetUIThreadTaskRunner({content::BrowserTaskType::kUserInput}));
   bluez::DBusBluezManagerWrapperLinux::Initialize();
 
   // Set up crypt config. This needs to be done before anything starts the
@@ -531,9 +557,10 @@ void ElectronBrowserMainParts::PostCreateMainMessageLoop() {
   config->store = command_line.GetSwitchValueASCII(::switches::kPasswordStore);
   config->product_name = app_name;
   config->application_name = app_name;
-  config->main_thread_runner = base::ThreadTaskRunnerHandle::Get();
+  config->main_thread_runner =
+      base::SingleThreadTaskRunner::GetCurrentDefault();
   // c.f.
-  // https://source.chromium.org/chromium/chromium/src/+/master:chrome/common/chrome_switches.cc;l=689;drc=9d82515060b9b75fa941986f5db7390299669ef1
+  // https://source.chromium.org/chromium/chromium/src/+/main:chrome/common/chrome_switches.cc;l=689;drc=9d82515060b9b75fa941986f5db7390299669ef1
   config->should_use_preference =
       command_line.HasSwitch(::switches::kEnableEncryptionSelection);
   base::PathService::Get(DIR_SESSION_DATA, &config->user_data_path);
@@ -565,11 +592,40 @@ void ElectronBrowserMainParts::PostMainMessageLoopRun() {
     }
   }
 
+  // Shutdown utility process created with Electron API before
+  // stopping Node.js so that exit events can be emitted. We don't let
+  // content layer perform this action since it destroys
+  // child process only after this step (PostMainMessageLoopRun) via
+  // BrowserProcessIOThread::ProcessHostCleanUp() which is too late for our
+  // use case.
+  // https://source.chromium.org/chromium/chromium/src/+/main:content/browser/browser_main_loop.cc;l=1086-1108
+  //
+  // The following logic is based on
+  // https://source.chromium.org/chromium/chromium/src/+/main:content/browser/browser_process_io_thread.cc;l=127-159
+  //
+  // Although content::BrowserChildProcessHostIterator is only to be called from
+  // IO thread, it is safe to call from PostMainMessageLoopRun because thread
+  // restrictions have been lifted.
+  // https://source.chromium.org/chromium/chromium/src/+/main:content/browser/browser_main_loop.cc;l=1062-1078
+  for (content::BrowserChildProcessHostIterator it(
+           content::PROCESS_TYPE_UTILITY);
+       !it.Done(); ++it) {
+    if (it.GetDelegate()->GetServiceName() == node::mojom::NodeService::Name_) {
+      auto& process = it.GetData().GetProcess();
+      if (!process.IsValid())
+        continue;
+      auto utility_process_wrapper =
+          api::UtilityProcessWrapper::FromProcessId(process.Pid());
+      if (utility_process_wrapper)
+        utility_process_wrapper->Shutdown(0 /* exit_code */);
+    }
+  }
+
   // Destroy node platform after all destructors_ are executed, as they may
   // invoke Node/V8 APIs inside them.
   node_env_->env()->set_trace_sync_io(false);
-  js_env_->OnMessageLoopDestroying();
-  node::Stop(node_env_->env());
+  js_env_->DestroyMicrotasksRunner();
+  node::Stop(node_env_->env(), node::StopFlags::kDoNotTerminateIsolate);
   node_env_.reset();
 
   auto default_context_key = ElectronBrowserContext::PartitionKey("", false);
@@ -616,12 +672,6 @@ ElectronBrowserMainParts::GetGeolocationControl() {
   }
   return geolocation_control_.get();
 }
-
-#if BUILDFLAG(IS_MAC)
-device::GeolocationManager* ElectronBrowserMainParts::GetGeolocationManager() {
-  return geolocation_manager_.get();
-}
-#endif
 
 IconManager* ElectronBrowserMainParts::GetIconManager() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);

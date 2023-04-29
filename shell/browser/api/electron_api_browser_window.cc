@@ -4,7 +4,7 @@
 
 #include "shell/browser/api/electron_api_browser_window.h"
 
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_widget_host_owner_delegate.h"  // nogncheck
 #include "content/browser/web_contents/web_contents_impl.h"  // nogncheck
@@ -73,17 +73,6 @@ BrowserWindow::BrowserWindow(gin::Arguments* args,
     web_preferences.Set(options::kShow, show);
   }
 
-  bool titleBarOverlay = false;
-  options.Get(options::ktitleBarOverlay, &titleBarOverlay);
-  if (titleBarOverlay) {
-    std::string enabled_features = "";
-    if (web_preferences.Get(options::kEnableBlinkFeatures, &enabled_features)) {
-      enabled_features += ",";
-    }
-    enabled_features += features::kWebAppWindowControlsOverlay.name;
-    web_preferences.Set(options::kEnableBlinkFeatures, enabled_features);
-  }
-
   // Copy the webContents option to webPreferences.
   v8::Local<v8::Value> value;
   if (options.Get("webContents", &value)) {
@@ -94,6 +83,7 @@ BrowserWindow::BrowserWindow(gin::Arguments* args,
   gin::Handle<WebContentsView> web_contents_view =
       WebContentsView::Create(isolate, web_preferences);
   DCHECK(web_contents_view.get());
+  window_->AddDraggableRegionProvider(web_contents_view.get());
 
   // Save a reference of the WebContents.
   gin::Handle<WebContents> web_contents =
@@ -157,14 +147,6 @@ void BrowserWindow::OnRendererResponsive(content::RenderProcessHost*) {
   Emit("responsive");
 }
 
-void BrowserWindow::OnDraggableRegionsUpdated(
-    const std::vector<mojom::DraggableRegionPtr>& regions) {
-  if (window_->has_frame())
-    return;
-
-  window_->UpdateDraggableRegions(regions);
-}
-
 void BrowserWindow::OnSetContentBounds(const gfx::Rect& rect) {
   // window.resizeTo(...)
   // window.moveTo(...)
@@ -216,7 +198,11 @@ void BrowserWindow::OnCloseButtonClicked(bool* prevent_default) {
 
   // Trigger beforeunload events for associated BrowserViews.
   for (NativeBrowserView* view : window_->browser_views()) {
-    auto* vwc = view->web_contents();
+    auto* iwc = view->GetInspectableWebContents();
+    if (!iwc)
+      continue;
+
+    auto* vwc = iwc->GetWebContents();
     auto* api_web_contents = api::WebContents::From(vwc);
 
     // Required to make beforeunload handler work.
@@ -420,7 +406,7 @@ void BrowserWindow::ScheduleUnresponsiveEvent(int ms) {
 
   window_unresponsive_closure_.Reset(base::BindRepeating(
       &BrowserWindow::NotifyWindowUnresponsive, GetWeakPtr()));
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, window_unresponsive_closure_.callback(),
       base::Milliseconds(ms));
 }
@@ -506,4 +492,4 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_window, Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_window, Initialize)

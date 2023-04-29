@@ -5,16 +5,16 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_util.h"
-#include "base/threading/thread_restrictions.h"
 #include "electron/electron_gtk_stubs.h"
 #include "shell/browser/javascript_environment.h"
 #include "shell/browser/native_window_views.h"
 #include "shell/browser/ui/file_dialog.h"
 #include "shell/browser/ui/gtk_util.h"
 #include "shell/common/gin_converters/file_path_converter.h"
+#include "shell/common/thread_restrictions.h"
 #include "ui/base/glib/glib_signal.h"
 #include "ui/gtk/gtk_ui.h"    // nogncheck
 #include "ui/gtk/gtk_util.h"  // nogncheck
@@ -36,8 +36,7 @@ std::string MakeCaseInsensitivePattern(const std::string& extension) {
     return extension;
 
   std::string pattern("*.");
-  for (std::size_t i = 0, n = extension.size(); i < n; i++) {
-    char ch = extension[i];
+  for (char ch : extension) {
     if (!base::IsAsciiAlpha(ch)) {
       pattern.push_back(ch);
       continue;
@@ -95,7 +94,7 @@ class FileChooserDialog {
       gtk_file_chooser_set_create_folders(dialog_, TRUE);
 
     if (!settings.default_path.empty()) {
-      base::ThreadRestrictions::ScopedAllowIO allow_io;
+      electron::ScopedAllowBlockingForElectron allow_blocking;
       if (base::DirectoryExists(settings.default_path)) {
         gtk_file_chooser_set_current_folder(
             dialog_, settings.default_path.value().c_str());

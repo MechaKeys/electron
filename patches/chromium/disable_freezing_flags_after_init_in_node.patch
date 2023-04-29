@@ -15,16 +15,16 @@ at some point be an API to "unfreeze" the flags, or we may be able to refactor
 node initialization to not update flags after V8 initialization.
 
 diff --git a/content/renderer/render_process_impl.cc b/content/renderer/render_process_impl.cc
-index 69f5528f0f6f3bfe6dab949b26dee9276aa115c6..81d637e84ef11681146beee74b1d27b23b16f11d 100644
+index 15928985bed40a7e0a26d9ab09f44f86ed3f3bd6..612616264b1caf097a4d45a4ba09e312b10e7acf 100644
 --- a/content/renderer/render_process_impl.cc
 +++ b/content/renderer/render_process_impl.cc
-@@ -241,6 +241,9 @@ RenderProcessImpl::RenderProcessImpl()
-   SetV8FlagIfNotFeature(features::kWebAssemblyDynamicTiering,
-                         "--no-wasm-dynamic-tiering");
+@@ -228,6 +228,9 @@ RenderProcessImpl::RenderProcessImpl()
+     v8::V8::SetFlagsFromString(kSABPerContextFlag, sizeof(kSABPerContextFlag));
+   }
  
 +  // Freezing flags after init conflicts with node in the renderer.
 +  v8::V8::SetFlagsFromString("--no-freeze-flags-after-init");
 +
  #if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(ARCH_CPU_X86_64)
    if (base::FeatureList::IsEnabled(features::kWebAssemblyTrapHandler)) {
-     if (command_line->HasSwitch(switches::kEnableCrashpad) ||
+     base::CommandLine* const command_line =

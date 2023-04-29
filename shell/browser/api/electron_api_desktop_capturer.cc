@@ -207,27 +207,31 @@ void DesktopCapturer::StartHandling(bool capture_window,
     // Initialize the source list.
     // Apply the new thumbnail size and restart capture.
     if (capture_window) {
-      window_capturer_ = std::make_unique<NativeDesktopMediaList>(
-          DesktopMediaList::Type::kWindow,
-          content::desktop_capture::CreateWindowCapturer());
-      window_capturer_->SetThumbnailSize(thumbnail_size);
-      window_capturer_->Update(
-          base::BindOnce(&DesktopCapturer::UpdateSourcesList,
-                         weak_ptr_factory_.GetWeakPtr(),
-                         window_capturer_.get()),
-          /* refresh_thumbnails = */ true);
+      if (auto capturer = content::desktop_capture::CreateWindowCapturer();
+          capturer) {
+        window_capturer_ = std::make_unique<NativeDesktopMediaList>(
+            DesktopMediaList::Type::kWindow, std::move(capturer));
+        window_capturer_->SetThumbnailSize(thumbnail_size);
+        window_capturer_->Update(
+            base::BindOnce(&DesktopCapturer::UpdateSourcesList,
+                           weak_ptr_factory_.GetWeakPtr(),
+                           window_capturer_.get()),
+            /* refresh_thumbnails = */ true);
+      }
     }
 
     if (capture_screen) {
-      screen_capturer_ = std::make_unique<NativeDesktopMediaList>(
-          DesktopMediaList::Type::kScreen,
-          content::desktop_capture::CreateScreenCapturer());
-      screen_capturer_->SetThumbnailSize(thumbnail_size);
-      screen_capturer_->Update(
-          base::BindOnce(&DesktopCapturer::UpdateSourcesList,
-                         weak_ptr_factory_.GetWeakPtr(),
-                         screen_capturer_.get()),
-          /* refresh_thumbnails = */ true);
+      if (auto capturer = content::desktop_capture::CreateScreenCapturer();
+          capturer) {
+        screen_capturer_ = std::make_unique<NativeDesktopMediaList>(
+            DesktopMediaList::Type::kScreen, std::move(capturer));
+        screen_capturer_->SetThumbnailSize(thumbnail_size);
+        screen_capturer_->Update(
+            base::BindOnce(&DesktopCapturer::UpdateSourcesList,
+                           weak_ptr_factory_.GetWeakPtr(),
+                           screen_capturer_.get()),
+            /* refresh_thumbnails = */ true);
+      }
     }
   }
 }
@@ -239,8 +243,8 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
     std::vector<DesktopCapturer::Source> window_sources;
     window_sources.reserve(list->GetSourceCount());
     for (int i = 0; i < list->GetSourceCount(); i++) {
-      window_sources.emplace_back(DesktopCapturer::Source{
-          list->GetSource(i), std::string(), fetch_window_icons_});
+      window_sources.emplace_back(list->GetSource(i), std::string(),
+                                  fetch_window_icons_);
     }
     std::move(window_sources.begin(), window_sources.end(),
               std::back_inserter(captured_sources_));
@@ -252,8 +256,7 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
     std::vector<DesktopCapturer::Source> screen_sources;
     screen_sources.reserve(list->GetSourceCount());
     for (int i = 0; i < list->GetSourceCount(); i++) {
-      screen_sources.emplace_back(
-          DesktopCapturer::Source{list->GetSource(i), std::string()});
+      screen_sources.emplace_back(list->GetSource(i), std::string());
     }
 #if BUILDFLAG(IS_WIN)
     // Gather the same unique screen IDs used by the electron.screen API in
@@ -282,7 +285,7 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
         base::UTF8ToWide(device_name.c_str(), device_name.size(),
                          &wide_device_name);
         const int64_t device_id =
-            display::win::DisplayInfo::DeviceIdFromDeviceName(
+            display::win::internal::DisplayInfo::DeviceIdFromDeviceName(
                 wide_device_name.c_str());
         source.display_id = base::NumberToString(device_id);
       }
@@ -356,4 +359,4 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_desktop_capturer, Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_desktop_capturer, Initialize)

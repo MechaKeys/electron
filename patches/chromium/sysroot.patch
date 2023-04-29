@@ -7,10 +7,10 @@ Make chrome's install-sysroot scripts point to our custom sysroot builds,
 which include extra deps that Electron needs (e.g. libnotify)
 
 diff --git a/build/linux/sysroot_scripts/install-sysroot.py b/build/linux/sysroot_scripts/install-sysroot.py
-index 7c18388b0082f766ae397daaa326ecfb26900ea7..e054db236481a6789d3304e60d92be5b98b8fae5 100755
+index 42842a184deb12b55c88b82134ef29f0d10c1a18..4dca0c2b63425b1592d0ee48b721402b8bebe347 100755
 --- a/build/linux/sysroot_scripts/install-sysroot.py
 +++ b/build/linux/sysroot_scripts/install-sysroot.py
-@@ -41,9 +41,11 @@ except ImportError:
+@@ -40,9 +40,11 @@ except ImportError:
    from urllib2 import urlopen
  
  SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

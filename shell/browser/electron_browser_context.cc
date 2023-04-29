@@ -16,8 +16,6 @@
 #include "base/path_service.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_util.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "base/threading/thread_restrictions.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -52,10 +50,12 @@
 #include "shell/browser/web_view_manager.h"
 #include "shell/browser/zoom_level_delegate.h"
 #include "shell/common/application_info.h"
+#include "shell/common/electron_constants.h"
 #include "shell/common/electron_paths.h"
 #include "shell/common/gin_converters/frame_converter.h"
 #include "shell/common/gin_helper/error_thrower.h"
 #include "shell/common/options_switches.h"
+#include "shell/common/thread_restrictions.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
@@ -106,9 +106,10 @@ ElectronBrowserContext::browser_context_map() {
   return *browser_context_map;
 }
 
-ElectronBrowserContext::ElectronBrowserContext(const std::string& partition,
-                                               bool in_memory,
-                                               base::Value::Dict options)
+ElectronBrowserContext::ElectronBrowserContext(
+    const PartitionOrPath partition_location,
+    bool in_memory,
+    base::Value::Dict options)
     : in_memory_pref_store_(new ValueMapPrefStore),
       storage_policy_(base::MakeRefCounted<SpecialStoragePolicy>()),
       protocol_registry_(base::WrapUnique(new ProtocolRegistry)),
@@ -124,11 +125,21 @@ ElectronBrowserContext::ElectronBrowserContext(const std::string& partition,
   base::StringToInt(command_line->GetSwitchValueASCII(switches::kDiskCacheSize),
                     &max_cache_size_);
 
-  base::PathService::Get(DIR_SESSION_DATA, &path_);
-  if (!in_memory && !partition.empty())
-    path_ = path_.Append(FILE_PATH_LITERAL("Partitions"))
-                .Append(base::FilePath::FromUTF8Unsafe(
-                    MakePartitionName(partition)));
+  if (auto* path_value = std::get_if<std::reference_wrapper<const std::string>>(
+          &partition_location)) {
+    base::PathService::Get(DIR_SESSION_DATA, &path_);
+    const std::string& partition_loc = path_value->get();
+    if (!in_memory && !partition_loc.empty()) {
+      path_ = path_.Append(FILE_PATH_LITERAL("Partitions"))
+                  .Append(base::FilePath::FromUTF8Unsafe(
+                      MakePartitionName(partition_loc)));
+    }
+  } else if (auto* filepath_partition =
+                 std::get_if<std::reference_wrapper<const base::FilePath>>(
+                     &partition_location)) {
+    const base::FilePath& partition_path = filepath_partition->get();
+    path_ = std::move(partition_path);
+  }
 
   BrowserContextDependencyManager::GetInstance()->MarkBrowserContextLive(this);
 
@@ -164,7 +175,7 @@ ElectronBrowserContext::~ElectronBrowserContext() {
 
 void ElectronBrowserContext::InitPrefs() {
   auto prefs_path = GetPath().Append(FILE_PATH_LITERAL("Preferences"));
-  base::ThreadRestrictions::ScopedAllowIO allow_io;
+  ScopedAllowBlockingForElectron allow_blocking;
   PrefServiceFactory prefs_factory;
   scoped_refptr<JsonPrefStore> pref_store =
       base::MakeRefCounted<JsonPrefStore>(prefs_path);
@@ -501,13 +512,16 @@ void ElectronBrowserContext::DisplayMediaDeviceChosen(
       devices.audio_device =
           blink::MediaStreamDevice(request.audio_type, id, name);
     } else if (result_dict.Get("audio", &rfh)) {
-      devices.audio_device = blink::MediaStreamDevice(
-          request.audio_type,
-          content::WebContentsMediaCaptureId(rfh->GetProcess()->GetID(),
-                                             rfh->GetRoutingID(),
-                                             /* disable_local_echo= */ true)
-              .ToString(),
-          "Tab audio");
+      bool enable_local_echo = false;
+      result_dict.Get("enableLocalEcho", &enable_local_echo);
+      bool disable_local_echo = !enable_local_echo;
+      devices.audio_device =
+          blink::MediaStreamDevice(request.audio_type,
+                                   content::WebContentsMediaCaptureId(
+                                       rfh->GetProcess()->GetID(),
+                                       rfh->GetRoutingID(), disable_local_echo)
+                                       .ToString(),
+                                   "Tab audio");
     } else if (result_dict.Get("audio", &id)) {
       devices.audio_device =
           blink::MediaStreamDevice(request.audio_type, id, "System audio");
@@ -583,19 +597,22 @@ bool ElectronBrowserContext::DoesDeviceMatch(
     const base::Value* device_to_compare,
     blink::PermissionType permission_type) {
   if (permission_type ==
-      static_cast<blink::PermissionType>(
-          WebContentsPermissionHelper::PermissionType::HID)) {
-    if (device.GetDict().FindInt(kHidVendorIdKey) !=
-            device_to_compare->GetDict().FindInt(kHidVendorIdKey) ||
-        device.GetDict().FindInt(kHidProductIdKey) !=
-            device_to_compare->GetDict().FindInt(kHidProductIdKey)) {
+          static_cast<blink::PermissionType>(
+              WebContentsPermissionHelper::PermissionType::HID) ||
+      permission_type ==
+          static_cast<blink::PermissionType>(
+              WebContentsPermissionHelper::PermissionType::USB)) {
+    if (device.GetDict().FindInt(kDeviceVendorIdKey) !=
+            device_to_compare->GetDict().FindInt(kDeviceVendorIdKey) ||
+        device.GetDict().FindInt(kDeviceProductIdKey) !=
+            device_to_compare->GetDict().FindInt(kDeviceProductIdKey)) {
       return false;
     }
 
     const auto* serial_number =
-        device_to_compare->GetDict().FindString(kHidSerialNumberKey);
+        device_to_compare->GetDict().FindString(kDeviceSerialNumberKey);
     const auto* device_serial_number =
-        device.GetDict().FindString(kHidSerialNumberKey);
+        device.GetDict().FindString(kDeviceSerialNumberKey);
 
     if (serial_number && device_serial_number &&
         *device_serial_number == *serial_number)
@@ -668,8 +685,25 @@ ElectronBrowserContext* ElectronBrowserContext::From(
     return browser_context;
   }
 
+  auto* new_context = new ElectronBrowserContext(std::cref(partition),
+                                                 in_memory, std::move(options));
+  browser_context_map()[key] =
+      std::unique_ptr<ElectronBrowserContext>(new_context);
+  return new_context;
+}
+
+ElectronBrowserContext* ElectronBrowserContext::FromPath(
+    const base::FilePath& path,
+    base::Value::Dict options) {
+  PartitionKey key(path);
+
+  ElectronBrowserContext* browser_context = browser_context_map()[key].get();
+  if (browser_context) {
+    return browser_context;
+  }
+
   auto* new_context =
-      new ElectronBrowserContext(partition, in_memory, std::move(options));
+      new ElectronBrowserContext(std::cref(path), false, std::move(options));
   browser_context_map()[key] =
       std::unique_ptr<ElectronBrowserContext>(new_context);
   return new_context;

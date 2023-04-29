@@ -116,6 +116,7 @@ class App : public ElectronBrowserClient::Delegate,
                                  base::Value::Dict user_info) override;
   void OnNewWindowForTab() override;
   void OnDidBecomeActive() override;
+  void OnDidResignActive() override;
 #endif
 
   // content::ContentBrowserClient:
@@ -235,7 +236,7 @@ class App : public ElectronBrowserClient::Delegate,
   bool IsRunningUnderARM64Translation() const;
 #endif
 
-#if defined(MAS_BUILD)
+#if IS_MAS_BUILD()
   base::RepeatingCallback<void()> StartAccessingSecurityScopedResource(
       gin::Arguments* args);
 #endif
